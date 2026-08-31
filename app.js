@@ -11,6 +11,13 @@ function startOfDay(d) { const x = new Date(d); x.setHours(0, 0, 0, 0); return x
 const DAY_ORDER = ['sat', 'sun', 'mon', 'tue', 'wed', 'thu', 'fri'];
 const DAY_LABEL = { sat: 'السبت', sun: 'الأحد', mon: 'الاثنين', tue: 'الثلاثاء', wed: 'الأربعاء', thu: 'الخميس', fri: 'الجمعة' };
 const DAY_LABEL_SHORT = { sat: 'سبت', sun: 'أحد', mon: 'اثنين', tue: 'ثلاثاء', wed: 'أربعاء', thu: 'خميس', fri: 'جمعة' };
+const ARABIC_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'];
+function formatArabicDate(dateKeyStr) {
+  const [y, m, d] = dateKeyStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  const weekdayKey = jsDayToKey(dt.getDay());
+  return `${DAY_LABEL[weekdayKey]} ${d} ${ARABIC_MONTHS[m - 1]}`;
+}
 function jsDayToKey(jsDay) { // JS: 0=Sun..6=Sat  -> our keys
   return ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][jsDay];
 }
@@ -428,8 +435,17 @@ function toggleTask(id) {
   if (t.done) {
     const prevXp = state.xp;
     state.xp += 5;
-    toast(encouragementFor('task'));
     checkLevelUp(prevXp, state.xp);
+    // if this is an auto lesson-study task (not gym, not itself a review), schedule spaced reviews
+    if (t.auto && t.subject && t.subject !== 'الجيم' && !t.reviewId && !t.reviewsCreated) {
+      const lessonName = t.title.replace(/^مذاكرة\s*/, '');
+      const created = createSpacedReviewsForLesson(t.subject, lessonName);
+      t.reviewsCreated = true;
+      const nextDate = created[0];
+      toast(`📅 هتراجع ${t.subject} تاني يوم ${formatArabicDate(nextDate.dueDate)}`, 3600);
+    } else {
+      toast(encouragementFor('task'));
+    }
   }
   saveState();
   render();
@@ -467,15 +483,26 @@ function ensureTodayAutoTasks() {
 /* ===================== Spaced repetition ===================== */
 function createSpacedReviewsForLesson(subject, lessonName) {
   const base = new Date();
+  const created = [];
   state.settings.reviewIntervalsDays.forEach(days => {
     const d = new Date(base); d.setDate(d.getDate() + days);
-    state.spacedReviews.push({ id: uid(), subject, lessonName, dueDate: dateKey(d), done: false });
+    const review = { id: uid(), subject, lessonName, dueDate: dateKey(d), done: false };
+    state.spacedReviews.push(review);
+    created.push(review);
   });
   saveState();
+  return created;
 }
 function todaysReviews() {
   const k = todayKey();
   return state.spacedReviews.filter(r => r.dueDate === k && !r.done);
+}
+function upcomingReviews(limit = 8) {
+  const k = todayKey();
+  return state.spacedReviews
+    .filter(r => !r.done && r.dueDate >= k)
+    .sort((a, b) => a.dueDate.localeCompare(b.dueDate))
+    .slice(0, limit);
 }
 function completeReview(id) {
   const r = state.spacedReviews.find(x => x.id === id);
@@ -776,6 +803,16 @@ function renderSchedule() {
       <p style="margin:0;font-weight:800;font-size:14px;">الجمعة = مراجعة وامتحان</p>
       <p style="margin:6px 0 0;font-size:12.5px;color:var(--ink);opacity:.75;">راجع كل ما أخذته خلال الأسبوع ثم اختبر نفسك قبل أسبوع جديد.</p>
     </div>
+
+    <div class="section-head"><p class="section-title" style="font-size:16px;">مراجعاتك القادمة 🧠</p></div>
+    ${upcomingReviews().length === 0 ? `<div class="empty-state"><span class="em-icon">📅</span>خلّص مهمة "مذاكرة" من مهام اليوم وهتظهرلك هنا مواعيد مراجعتها تلقائيًا.</div>` :
+      upcomingReviews().map(r => `
+      <div class="lesson-row" style="border-inline-start-color:var(--coral);">
+        <div class="lesson-body">
+          <p class="lesson-name">${escapeHtml(r.lessonName)}${r.lessonName !== r.subject ? ` <span style="color:var(--muted);font-weight:600;">— ${escapeHtml(r.subject)}</span>` : ''}</p>
+          <p class="lesson-time">${r.dueDate === todayKey() ? '📌 مستحقة اليوم' : formatArabicDate(r.dueDate)}</p>
+        </div>
+      </div>`).join('')}
   </div>`;
 }
 
